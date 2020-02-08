@@ -21,18 +21,21 @@ Imports:
     cli,
     utils,
     yaml,
-    parallel
+    parallel,
+    Rcpp
 License: GPL-2
 Encoding: UTF-8
-RoxygenNote: 7.0.2
+RoxygenNote: 7.1.0
 Suggests: 
     testthat,
     knitr,
     rmarkdown
 VignetteBuilder: knitr
 Remotes: sdcTools/ptable@master
-NeedsCompilation: no
+NeedsCompilation: yes
 Author: Bernhard Meindl [aut, cre]
 Maintainer: Bernhard Meindl <bernhard.meindl@statistik.gv.at>
 LazyData: true
 BugReports: https://github.com/sdcTools/cellKey/issues
+LinkingTo: 
+    Rcpp

@@ -8,3 +8,6 @@ doc
 *.html
 inst/doc
 debug/
+autom4te.cache
+config.log
+config.status
