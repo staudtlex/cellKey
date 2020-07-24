@@ -386,7 +386,7 @@ ck_class <- R6::R6Class("cellkey_obj", cloneable = FALSE,
 
       # top_k is hardcoded to 6;
       # this is the maximum allowed value for top_k, also in params_nums()
-      max_contributions <- .get_max_contributions(
+      max_contributions <- .cpp_get_max_contributions(
         indices = contr_indices,
         microdat = microdat,
         nv = numvars,
