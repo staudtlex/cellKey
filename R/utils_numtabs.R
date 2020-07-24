@@ -2,11 +2,10 @@
 .scramble_ckeys <- function(ck, top_k, same_key) {
   beg <- substr(ck, 1, 2)
   res <- rep(NA, top_k)
-
   len <- nchar(ck)
-
   if (!same_key) {
-    res[1] <- paste0(beg, substr(ck, 4, len), substr(ck, 3, 3))
+    ss <- substr(ck, 4, len)
+    res[1] <- paste0(beg, ifelse(ss == "", "0", ss), substr(ck, 3, 3))
   } else {
     res[1] <- ck
   }
@@ -69,7 +68,7 @@
     })
   }
 
-  ind_comb <- which(a < d)
+  ind_comb <- setdiff(which(a < d), ind_exact)
   if (length(ind_comb) > 0) {
     v[ind_comb] <- sapply(ind_comb, function(x) {
       if (params$lookup[x] == "_zero_") {
@@ -99,10 +98,21 @@
 # params: a perturbation parameter object created with `ck_params_nums` and
 #         mult_params need to be of class `params_m_flex`
 .perturb_cell_flex <- function(cv, x, ck, lookup, prot_req, params) {
+  # no obs -> return an empty parameter set
+  if (ck == 0) {
+    return(list(
+      x_hats = 0,
+      cv = 0,
+      cv_p = 0,
+      lookup = lookup,
+      x_delta = 1
+    ))
+  }
+
   type <- i <- NULL
   dig <- .ck_digits()
 
-  debug <- FALSE
+  debug <- TRUE
   fp <- params$mult_params$fp
   p_lg <- params$mult_params$p_large
   p_sm <- params$mult_params$p_small
@@ -216,10 +226,21 @@
 # params: a perturbation parameter object created with `ck_params_nums` and
 #         mult_params need to be of class `params_m_simple`
 .perturb_cell_simple <- function(cv, x, ck, lookup, prot_req, params) {
+  # no obs -> return an empty parameter set
+  if (ck == 0) {
+    return(list(
+      x_hats = 0,
+      cv = 0,
+      cv_p = 0,
+      lookup = lookup,
+      x_delta = 1
+    ))
+  }
+
+
   type <- i <- NULL
   debug <- TRUE
   dig <- .ck_digits()
-
 
   p <- params$mult_params$p # default percentage
   if (debug) {
@@ -243,7 +264,7 @@
   xo <- cv
   sign_xo <- sign(xo)
   x_hats <- rep(NA, length(x))
-  cnt_sc <- 0
+  has_small_cells <- FALSE
   for (j in seq_len(length(x))) {
     zero_pert <- FALSE
 
@@ -256,9 +277,9 @@
     abs_xj <- abs(xj)
 
     if (abs_xj < zs) {
-      x_delta <- xj # in this case, m equals 1
+      x_delta <- 1 # in this case, m equals 1
       lookup_params$lookup <- "small_cells"
-      cnt_sc <- cnt_sc + 1
+      has_small_cells <- TRUE
     } else {
       x_delta <- xj * p * params$mult_params$epsilon[j]
     }
@@ -277,8 +298,8 @@
       if (abs(abs_xj) < zs) {
         x_delta <- 1
         lookup_params$lookup <- "small_cells"
-        cnt_sc <- cnt_sc + 1
-        if (cnt_sc > 1) {
+        has_small_cells <- TRUE
+        if (has_small_cells) {
           zero_pert <- TRUE
         }
       }

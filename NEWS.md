@@ -1,3 +1,18 @@
+# cellKey 0.18.11
+- performance-improvment: speed-up computation of contributing units to cells
+
+# cellKey 0.18.10
+- bugfix: scrambling cell keys having not enough digits
+- bugfix: computation separation point in flex-approach
+
+# cellKey 0.18.9
+- set default value of argument `w = NULL` in `ck_setup()`
+- improve some error messages/outputs
+- bugfix when looking up perturbation values; small_cells and others must not intersect
+
+# cellKey 0.18.8
+- fixing issues with empty cells for magnitude tables
+
 # cellKey 0.18.7
 - fixed computation of weighted spreads, thx @staudtlex
 

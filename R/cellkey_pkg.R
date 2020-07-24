@@ -20,7 +20,7 @@ ck_class <- R6::R6Class("cellkey_obj", cloneable = FALSE,
     #' These variables can later be perturbed.
     #' @param numvars (character) an optional vector of numerical variables that can later be tabulated.
     #' @return A new `cellkey_obj` object.
-    initialize = function(x, rkey, dims, w, countvars = NULL, numvars = NULL) {
+    initialize = function(x, rkey, dims, w = NULL, countvars = NULL, numvars = NULL) {
       type <- is_perturbed <- NULL
 
       if (!inherits(x, "data.frame")) {
@@ -151,6 +151,9 @@ ck_class <- R6::R6Class("cellkey_obj", cloneable = FALSE,
           stop("Some elements provided in `numvars` are not numeric.", call. = FALSE)
         }
 
+        setnames(x, numvars, tolower(numvars))
+        numvars <- tolower(numvars)
+
         # compute weighted variables and index to compute record keys for only
         # units actually contributing
         numvars_w <- paste0("ws_", numvars)
@@ -207,9 +210,133 @@ ck_class <- R6::R6Class("cellkey_obj", cloneable = FALSE,
 
       # calculate contributing indices
       # we do this in any case!
-      contr_indices <- sdcTable::contributing_indices(
+      ck_log("compute contributing indices")
+      # the .contributing_indices_tmp() should be removed
+      # once sdcTable 0.32 is on cran as this version has the
+      # appropriate fixes;
+      .contributing_indices_tmp = function(prob, ids = NULL) {
+        # returns all contributing codes for each dimensions
+        # of a sdcProblem-object; dimensions are converted
+        # sdcHierarchies-trees and hier_info() is then used.
+        .get_all_contributing_codes <- function(x) {
+          .sdchier_from_sdc <- function(d) {
+            df <- data.frame(
+              levels = slot(d, "levels"),
+              codes = slot(d, "codesOriginal"),
+              stringsAsFactors = FALSE
+            )
+            df$levels <- sapply(1:nrow(df), function(x) {
+              paste0(rep("@", df$levels[x]), collapse = "")
+            })
+            hier_import(df, from = "df")
+          }
+
+          stopifnot(inherits(x, "sdcProblem"))
+          dims_hier <- lapply(x@dimInfo@dimInfo, function(x) {
+            .sdchier_from_sdc(x)
+          })
+
+          dims_info <- lapply(dims_hier, function(x) {
+            hier_info(x)
+          })
+
+          all_contr_codes <- lapply(dims_info, function(x) {
+            lapply(x, function(y) {
+              list(
+                is_root = y$is_rootnode,
+                contr_codes = y$contributing_codes
+              )
+            })
+          })
+          all_contr_codes
+        }
+
+        . <- NULL
+        dt <- sdcProb2df(prob, addDups = FALSE, dimCodes = "original")
+        poss_ids <- dt$strID
+
+        if (is.null(ids)) {
+          ids <- poss_ids
+        } else {
+          if (!is.character(ids)) {
+            stop("Please provide a character vector in argument `ids`.", call. = FALSE)
+          }
+          if (!all(ids %in% poss_ids)) {
+            e <- c(
+              "Some values provided in `ids` are not valid. ",
+              "See column `strID` in `sdcProb2df()` for valid ids."
+            )
+            stop(paste(e, collapse = " "), call. = FALSE)
+          }
+        }
+
+        dimvars <- slot(prob, "dimInfo")@vNames
+        nr_dims <- length(dimvars)
+
+        dt <- dt[, c("strID", "freq", dimvars), with = FALSE]
+        data.table::setnames(dt, old = "strID", new = "id")
+
+        # we compute all unique codes once
+        unique_codes <- lapply(dt[, dimvars, with = FALSE], function(x) {
+          sort(unique(x))
+        })
+
+        # get contributing codes
+        contr_codes <- .get_all_contributing_codes(prob)
+
+        # positions in strID
+        str_info <- prob@dimInfo@strInfo
+        names(str_info) <- dimvars
+
+        # merge inner cell-info to data
+        dt_inner <- data.table(id = prob@dimInfo@strID, is_inner = TRUE)
+        dt_inner$idx <- 1:nrow(dt_inner)
+        dt_inner <- dt[dt_inner, on = "id"]
+
+        dt_inner$tmp <- apply(dt_inner[, dimvars, with = FALSE], 1, paste0, collapse = "")
+        setkeyv(dt_inner, "tmp")
+
+        # subsetting dt to those ids, we want to compute the contributing indices from
+        dt <- dt[.(ids), on = "id"]
+
+        # prepare output
+        res <- vector("list", length(ids))
+        names(res) <- ids
+
+        for (i in seq_len(nrow(dt))) {
+          strID <- dt$id[i]
+          if (dt$freq[i] == 0) {
+            res[[strID]] <- integer()
+          } else {
+            index_vec <- which(dt_inner$id == strID)
+            if (length(index_vec) > 0) {
+              res[[strID]] <- dt_inner$idx[index_vec]
+            } else {
+              lev_info <- vector("list", length = nr_dims)
+              names(lev_info) <- dimvars
+              for (dv in dimvars) {
+                code <- dt[[dv]][i]
+                info <- contr_codes[[dv]][[code]]
+                if (!info$is_root) {
+                  lev_info[[dv]] <- info$contr_codes
+                } else {
+                  lev_info[[dv]] <- unique_codes[[dv]]
+                }
+              }
+              cell_indices <- sdcTable:::pasteStrVec(unlist(expand.grid(lev_info)), nr_dims)
+              res[[strID]] <- which(dt_inner$tmp %in% cell_indices)
+            }
+          }
+        }
+        return(res)
+      }
+
+      #contr_indices <- sdcTable::contributing_indices(
+      contr_indices <- .contributing_indices_tmp(
         prob = prob,
         ids = NULL)
+
+      ck_log("find top k contributors for each cell and numerical variable")
 
       # finding top_k contributors for each cell and numerical variable
       microdat <- prob@dataObj@rawData[, c(names(dims), numvars, wvar), with = FALSE]
@@ -221,7 +348,6 @@ ck_class <- R6::R6Class("cellkey_obj", cloneable = FALSE,
       .get_max_contributions <- function(indices, microdat, wvar, nv, top_k) {
         res <- vector("list", length = length(indices))
         names(res) <- names(indices)
-
         for (i in seq_len(length(res))) {
           out <- vector("list", length = length(nv))
           names(out) <- nv
@@ -231,27 +357,22 @@ ck_class <- R6::R6Class("cellkey_obj", cloneable = FALSE,
             xx$.tmpordervar <- abs(xx[[v]])
             xx$.tmpweightvar <- xx[[v]] * xx[[wvar]]
             setorderv(xx, c(".tmpordervar", wvar), order = c(-1L, -1L))
-
-            # unweighted
-            out[[v]]$uw_ids <- xx$.tmpid[1:top_k]
-            out[[v]]$w_ids <- out[[v]]$uw_ids
-
-            if (top_k == 0) {
+            if (nrow(xx) == 0) {
+              out[[v]]$uw_vals <- out[[v]]$w_vals <- 0
+              out[[v]]$uw_ids <- out[[v]]$w_ids <- NA
               out[[v]]$uw_spread <- out[[v]]$w_spread <- 0
               out[[v]]$uw_sum <- out[[v]]$w_sum <- 0
               out[[v]]$uw_mean <- out[[v]]$w_mean <- 0
-              out[[v]]$uw_vals <- out[[v]]$w_vals <- 0
             } else {
+              out[[v]]$uw_vals <- xx[[v]][1:top_k]
+              out[[v]]$uw_ids <- out[[v]]$w_ids <- xx$.tmpid[1:top_k]
               out[[v]]$uw_spread <- diff(range(xx[[v]], na.rm = TRUE))
               out[[v]]$uw_sum <- sum(xx[[v]], na.rm = TRUE)
               out[[v]]$uw_mean <- out[[v]]$uw_sum / nrow(xx)
-
-              out[[v]]$w_spread <- diff(range(xx$.tmpweightvar, na.rm = TRUE))
+              out[[v]]$w_vals <- xx$.tmpweightvar[1:top_k]
+              out[[v]]$w_spread <- diff(range(xx[[v]], na.rm = TRUE))
               out[[v]]$w_sum <- sum(xx$.tmpweightvar, na.rm = TRUE)
               out[[v]]$w_mean <- out[[v]]$w_sum / sum(xx[[wvar]], na.rm = TRUE)
-
-              out[[v]]$uw_vals <- xx[[v]][1:top_k]
-              out[[v]]$w_vals <- xx$.tmpweightvar[1:top_k]
             }
             # we compute if the number of contributors to the cell
             # is even or odd. This information can later be used if
@@ -265,7 +386,6 @@ ck_class <- R6::R6Class("cellkey_obj", cloneable = FALSE,
 
       # top_k is hardcoded to 6;
       # this is the maximum allowed value for top_k, also in params_nums()
-
       max_contributions <- .get_max_contributions(
         indices = contr_indices,
         microdat = microdat,
@@ -582,9 +702,14 @@ ck_class <- R6::R6Class("cellkey_obj", cloneable = FALSE,
         avail <- private$.ck_perturbed_vars("countvars")
         e <- c(
           "Variable `v` is neither a perturbed count ",
-          "nor a perturbed numeric variable. Possible choices are:\n",
-          paste("-->", shQuote(avail), collapse = "\n")
-        )
+          "nor a perturbed numeric variable.\n")
+        if (length(avail) > 0) {
+          e <- c(e, "Possible choices are: ",
+          paste(shQuote(avail), collapse = "\n"))
+        } else {
+          e <- c(e, "Please perturb one of the following variables first: ",
+            paste(shQuote(self$cntvars()), collapse = "\n"))
+        }
         stop(paste(e, collapse = ""), call. = FALSE)
       }
     },
@@ -1342,11 +1467,9 @@ ck_class <- R6::R6Class("cellkey_obj", cloneable = FALSE,
         return("odd")
       }, mc.cores = .ck_cores()) # nolint
 
-
       if (lookup_type == "flex") {
         fun <- .perturb_cell_flex
-      }
-      if (lookup_type == "simple") {
+      } else if (lookup_type == "simple") {
         fun <- .perturb_cell_simple
       }
 
@@ -1693,7 +1816,7 @@ ck_class <- R6::R6Class("cellkey_obj", cloneable = FALSE,
 #'
 #' # display a summary about utility measures
 #' tab$summary()
-ck_setup <- function(x, rkey, dims, w, countvars = NULL, numvars = NULL) {
+ck_setup <- function(x, rkey, dims, w = NULL, countvars = NULL, numvars = NULL) {
   ck_class$new(
     x = x,
     rkey = rkey,
